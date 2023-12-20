@@ -1,11 +1,13 @@
 import argparse
 import os
+import re
 import subprocess
 
 CHANGELOG_GITHUB_TEMPLATE_PATH = ".github/workflows/generate_changelog.yml"
 RELEASE_GITHUB_TEMPLATE_PATH = ".github/workflows/release.yml"
 CHANGELOG_GITHUB_TEMPLATE_NAME = "template_generate_changelog.yml"
 RELEASE_GITHUB_TEMPLATE_NAME = "template_release.yml"
+TAG_PATTERN = r'v[0-9]+.[0-9]+.[0-9]*'
 
 
 def write_template(file_to_write, template_file):
@@ -45,6 +47,38 @@ def create_template_file(template_file_path, template_path, template_file_name):
         except Exception as error:
             raise error
 
+def get_tag(parent_dir) -> str:
+    """
+    Get the repository tag.
+
+    parent_dir {str}:                   parent directory
+    """
+    tag_version = None
+    git_repository = parent_dir + ".git"
+    if os.path.exists(git_repository):
+        try:
+            changelog_process = subprocess.run(
+                ["git", "describe", "--tags"], capture_output=True, cwd=parent_dir
+            )
+            tag_version = changelog_process.stdout.decode("utf-8")
+            if not tag_version:
+                print("Please create a tag and a release before running this script")
+                return None
+
+            if not re.match(TAG_PATTERN, tag_version):
+                print("Please create a tag which respect this pattern: %s", TAG_PATTERN)
+                return None
+
+            if tag_version.startswith("v"):
+                tag_version = tag_version[1:]
+
+        except subprocess.CalledProcessError as e:
+            raise(e.returncode, e.output)
+    else:
+        print("Please to run this script into a git repository")
+        return None
+    return tag_version
+
 
 def main():
     """Main function"""
@@ -63,10 +97,23 @@ def main():
     if not parent_dir.endswith("/"):
         parent_dir += "/"
 
+    # Step 1: Set up Tag in the changelog file
+    tag_version = get_tag(parent_dir)
+    if not tag_version:
+        return
+    changelog = parent_dir + "CHANGELOG.md"
+    if not os.path.exists(changelog):
+        f = open(changelog, "a")
+        f.close()
+        f = open(changelog, "w")
+        tag_version = "## " + tag_version[:-1] + "(Unreleased)"
+        f.write(tag_version)
+        f.close()
+
     curent_dir = os.getcwd()
     template_path = "/".join(curent_dir.split("/")[:-1]) + "/templates/"
 
-    # Step 1 - Changelog folder
+    # Step 2 - Folder's creation
     changelog_folder = os.path.join(parent_dir, ".changelog")
     if not os.path.exists(changelog_folder):
         os.mkdir(changelog_folder)
@@ -88,7 +135,7 @@ def main():
     if not os.path.exists(workflow_folder):
         os.mkdir(workflow_folder)
 
-    # Step 2 - .ci submodule
+    # Step 3 - .ci submodule
     ci_process = subprocess.Popen(['git', 'submodule', 'add', '--name', '.ci', 'https://github.com/FrangipaneTeam/release-ci', '.ci'], cwd=parent_dir)
     ci_process.wait()
 
@@ -102,35 +149,6 @@ def main():
     template_file_name = RELEASE_GITHUB_TEMPLATE_NAME
     create_template_file(template_file_path, template_path, template_file_name)
 
-    # Step 5: CHANGELOG.md
-    tag_version = None
-    git_repository = parent_dir + ".git"
-    if os.path.exists(git_repository):
-        try:
-            changelog_process = subprocess.run(
-                ["git", "describe", "--tags"], capture_output=True, cwd=parent_dir
-            )
-            tag_str = changelog_process.stdout.decode("utf-8")
-            if tag_str.startswith("v"):
-                tag_str = tag_str[1:]
-            if tag_str:
-                tag_version = tag_str
-        except subprocess.CalledProcessError as e:
-            print(e.returncode, e.output)
-        except Exception as e:
-            print("Exception during git describe tag execution: %e", e)
-
-    changelog = parent_dir + "CHANGELOG.md"
-    if not os.path.exists(changelog):
-        f = open(changelog, "a")
-        f.close()
-        f = open(changelog, "w")
-        if not tag_version:
-            f.write("## 0.0.1 (Unreleased)")
-        else:
-            tag_version = "## " + tag_version[:-1] + "(Unreleased)"
-            f.write(tag_version)
-        f.close()
     print("Changelog sucessfully added")
 
 
